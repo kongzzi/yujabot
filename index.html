@@ -21,6 +21,7 @@
   .bot { background: var(--bot); align-self: flex-start; border-bottom-left-radius: 4px; }
   .user { background: var(--user); color: #fff; align-self: flex-end; border-bottom-right-radius: 4px; }
   .msg.err { background: transparent; border: 1px dashed #d97706; color: #b45309; }
+  .msg.err .retry { margin-left: 6px; border: 1px solid #d97706; background: transparent; color: inherit; border-radius: 999px; padding: 3px 10px; font: inherit; font-size: 13px; cursor: pointer; }
   #examples { display: flex; flex-wrap: wrap; gap: 8px; padding: 0 16px 8px; }
   #examples button { border: 1px solid var(--line); background: var(--card); color: var(--text); border-radius: 999px; padding: 8px 12px; font-size: 13px; cursor: pointer; }
   #examples button:hover { border-color: var(--brand); }
@@ -84,33 +85,53 @@
     return d;
   }
 
-  async function ask(text) {
-    text = text.trim();
-    if (!text || busy) return;
-    busy = true; sendBtn.disabled = true;
-    $('examples').style.display = 'none';
-    add('user', text);
-    history.push({ role: 'user', content: text });
-    input.value = ''; input.style.height = 'auto';
-    const wait = add('bot', '답변을 만드는 중…');
+  // 서버에 질문을 보내고 { reply } 또는 { error } 를 돌려줍니다. (대화 기록은 바꾸지 않습니다)
+  async function call(text) {
     try {
       const r = await fetch('/api/chat', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ system: systemPrompt(), messages: history })
+        body: JSON.stringify({ system: systemPrompt(), messages: history.concat({ role: 'user', content: text }) })
       });
       const data = await r.json().catch(() => ({}));
-      if (!r.ok) throw new Error(data.error || '오류가 발생했어요.');
-      wait.textContent = data.reply;
-      history.push({ role: 'assistant', content: data.reply });
+      if (!r.ok) return { error: data.error || '오류가 발생했어요.' };
+      return { reply: data.reply };
     } catch (e) {
-      wait.className = 'msg err';
-      wait.textContent = e.message || '연결에 실패했어요.';
-      history.pop();                // 실패한 질문은 대화 기록에서 뺀다
-    } finally {
-      busy = false; sendBtn.disabled = false; input.focus();
-      log.scrollTop = log.scrollHeight;
+      return { error: '연결에 실패했어요. 잠시 후 다시 해 주세요.' };
     }
+  }
+
+  async function ask(text, again) {
+    text = text.trim();
+    if (!text || busy) return;
+    busy = true; sendBtn.disabled = true;
+    $('examples').style.display = 'none';
+    if (!again) add('user', text);          // 다시 보내기일 때는 내 말풍선을 또 만들지 않는다
+    input.value = ''; input.style.height = 'auto';
+    const wait = add('bot', '답변을 만드는 중…');
+    let result = await call(text);
+    // AI가 바쁠 때(503)는 잠시 뒤 자동으로 한 번 더 시도한다
+    if (result.error && /503/.test(result.error)) {
+      wait.textContent = 'AI가 바빠서 잠시 뒤 한 번 더 시도해요…';
+      await new Promise((ok) => setTimeout(ok, 3000));
+      result = await call(text);
+    }
+    if (result.reply !== undefined) {
+      wait.textContent = result.reply;
+      history.push({ role: 'user', content: text });
+      history.push({ role: 'assistant', content: result.reply });
+    } else {
+      wait.className = 'msg err';
+      wait.textContent = result.error + ' ';
+      const again = document.createElement('button');
+      again.type = 'button';
+      again.className = 'retry';
+      again.textContent = '다시 보내기';
+      again.onclick = () => { wait.remove(); ask(text, true); };
+      wait.appendChild(again);              // 실패한 질문은 대화 기록에 넣지 않는다
+    }
+    busy = false; sendBtn.disabled = false; input.focus();
+    log.scrollTop = log.scrollHeight;
   }
 
   $('form').addEventListener('submit', (e) => { e.preventDefault(); ask(input.value); });

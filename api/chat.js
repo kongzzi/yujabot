@@ -8,7 +8,10 @@
 // 기본값: gemini-4-hydrogen 이 바쁘거나 없으면 gemini-3.8-flash 로 넘어갑니다. (모델 이름은 AI Studio의 모델 목록에서 확인합니다)
 const MODELS = (process.env.GEMINI_MODEL || 'gemini-4-hydrogen,gemini-3.8-flash').split(',').map((m) => m.trim()).filter(Boolean);
 const RETRY_WAIT_MS = 1500;      // 모델이 바쁠 때(503) 다시 시도하기 전 기다리는 시간
-const MAX_OUTPUT_TOKENS = 700;   // 답변 길이 상한
+const CALL_TIMEOUT_MS = 20000;   // 모델 한 번 호출을 기다리는 최대 시간
+const TOTAL_TIMEOUT_MS = 40000;  // 한 질문에 쓰는 전체 시간(이 시간이 지나면 새 시도를 하지 않음)
+const MAX_OUTPUT_TOKENS = 4096;  // 답변 길이 상한 (생각하는 모델은 생각에 쓰는 토큰도 포함되므로 넉넉하게)
+const THINKING = (process.env.GEMINI_THINKING || '').trim();  // 선택: 생각 수준(예: low). 비우면 모델 기본값
 const MAX_MESSAGES = 12;         // 한 번에 보내는 대화 길이 상한
 const MAX_MSG_CHARS = 1000;      // 질문 1개 글자 상한
 const MAX_SYSTEM_CHARS = 30000;  // 지시문 + 지식칸 상한
@@ -61,24 +64,41 @@ module.exports = async (req, res) => {
         role: m.role === 'assistant' ? 'model' : 'user',
         parts: [{ text: m.content }],
       })),
-      generationConfig: { maxOutputTokens: MAX_OUTPUT_TOKENS },
+      generationConfig: THINKING
+        ? { maxOutputTokens: MAX_OUTPUT_TOKENS, thinkingConfig: { thinkingLevel: THINKING } }
+        : { maxOutputTokens: MAX_OUTPUT_TOKENS },
     });
 
     // 모델을 차례로 시도합니다. 바쁠 때(503)는 같은 모델로 한 번 더 시도한 뒤 다음 모델로 넘어갑니다.
+    // 시도마다 모델 이름, 결과 번호, 걸린 시간을 로그에 남깁니다. (Vercel Logs에서 확인)
     const attempts = 2;
-    let r;
+    const started = Date.now();
+    let r = { ok: false, status: 504 };
     let data = {};
     for (const model of MODELS) {
       for (let i = 0; i < attempts; i++) {
-        r = await fetch(
-          `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent`,
-          {
-            method: 'POST',
-            headers: { 'content-type': 'application/json', 'x-goog-api-key': apiKey },
-            body: payload,
-          }
-        );
-        data = await r.json().catch(() => ({}));
+        if (Date.now() - started > TOTAL_TIMEOUT_MS) break;
+        const t0 = Date.now();
+        const ctl = new AbortController();
+        const timer = setTimeout(() => ctl.abort(), CALL_TIMEOUT_MS);
+        try {
+          r = await fetch(
+            `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent`,
+            {
+              method: 'POST',
+              headers: { 'content-type': 'application/json', 'x-goog-api-key': apiKey },
+              body: payload,
+              signal: ctl.signal,
+            }
+          );
+          data = await r.json().catch(() => ({}));
+        } catch (e) {
+          r = { ok: false, status: 504 };   // 시간 초과 또는 연결 실패
+          data = { error: { message: String(e && e.name) } };
+        } finally {
+          clearTimeout(timer);
+        }
+        console.log('Gemini', model, r.status, `${Date.now() - t0}ms`, `시도 ${i + 1}`);
         if (r.ok) break;
         console.error('Gemini error', model, r.status, JSON.stringify(data).slice(0, 300));
         if (r.status !== 503 && r.status !== 500 && r.status !== 504) break;
@@ -97,12 +117,18 @@ module.exports = async (req, res) => {
           ? 'AI 모델을 찾을 수 없어요. 선생님께 알려 주세요. (오류 404)'
           : code === 503
           ? '지금 AI가 많이 바빠요. 잠시 후 다시 해 주세요. (오류 503)'
+          : code === 504
+          ? '답이 너무 늦어지고 있어요. 잠시 후 다시 해 주세요. (오류 504)'
           : `답변을 만들지 못했어요. 잠시 후 다시 해 주세요. (오류 ${code})`;
       return res.status(502).json({ error: msg });
     }
     const parts = data.candidates?.[0]?.content?.parts || [];
     const text = parts.map((p) => p.text || '').join('').trim();
-    if (!text) return res.status(200).json({ reply: '답변을 만들 수 없는 질문이에요. 다르게 물어봐 주세요.' });
+    if (!text) {
+      // 빈 답: 이유를 로그에 남깁니다. (MAX_TOKENS: 길이 상한에 닿음, SAFETY: 안전 규칙에 걸림 등)
+      console.log('Gemini 빈 답', JSON.stringify({ finishReason: data.candidates?.[0]?.finishReason, promptFeedback: data.promptFeedback, usage: data.usageMetadata }).slice(0, 400));
+      return res.status(200).json({ reply: '답변을 만들 수 없는 질문이에요. 다르게 물어봐 주세요.' });
+    }
     return res.status(200).json({ reply: text });
   } catch (e) {
     console.error(e);

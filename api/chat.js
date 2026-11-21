@@ -4,7 +4,10 @@
 // API 키는 코드에 쓰지 않고 Vercel 환경변수 GEMINI_API_KEY 에만 넣습니다.
 // 브라우저에서는 이 키가 보이지 않습니다.
 
-const MODEL = process.env.GEMINI_MODEL || 'gemini-4-hydrogen';
+// 모델 이름: 환경변수 GEMINI_MODEL로 바꿀 수 있고, 쉼표로 여러 개를 적으면 앞에서부터 차례로 시도합니다.
+// 기본값: gemini-4-hydrogen 이 바쁘거나 없으면 gemini-3.8-flash 로 넘어갑니다. (모델 이름은 AI Studio의 모델 목록에서 확인합니다)
+const MODELS = (process.env.GEMINI_MODEL || 'gemini-4-hydrogen,gemini-3.8-flash').split(',').map((m) => m.trim()).filter(Boolean);
+const RETRY_WAIT_MS = 1500;      // 모델이 바쁠 때(503) 다시 시도하기 전 기다리는 시간
 const MAX_OUTPUT_TOKENS = 700;   // 답변 길이 상한
 const MAX_MESSAGES = 12;         // 한 번에 보내는 대화 길이 상한
 const MAX_MSG_CHARS = 1000;      // 질문 1개 글자 상한
@@ -52,30 +55,49 @@ module.exports = async (req, res) => {
   }
 
   try {
-    const r = await fetch(
-      `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(MODEL)}:generateContent`,
-      {
-        method: 'POST',
-        headers: { 'content-type': 'application/json', 'x-goog-api-key': apiKey },
-        body: JSON.stringify({
-          systemInstruction: { parts: [{ text: `${SAFETY}\n\n${system}` }] },
-          contents: clean.map((m) => ({
-            role: m.role === 'assistant' ? 'model' : 'user',
-            parts: [{ text: m.content }],
-          })),
-          generationConfig: { maxOutputTokens: MAX_OUTPUT_TOKENS },
-        }),
+    const payload = JSON.stringify({
+      systemInstruction: { parts: [{ text: `${SAFETY}\n\n${system}` }] },
+      contents: clean.map((m) => ({
+        role: m.role === 'assistant' ? 'model' : 'user',
+        parts: [{ text: m.content }],
+      })),
+      generationConfig: { maxOutputTokens: MAX_OUTPUT_TOKENS },
+    });
+
+    // 모델을 차례로 시도합니다. 모델이 하나뿐이면 바쁠 때(503) 한 번 더 시도합니다.
+    const attempts = MODELS.length === 1 ? 2 : 1;
+    let r;
+    let data = {};
+    for (const model of MODELS) {
+      for (let i = 0; i < attempts; i++) {
+        r = await fetch(
+          `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent`,
+          {
+            method: 'POST',
+            headers: { 'content-type': 'application/json', 'x-goog-api-key': apiKey },
+            body: payload,
+          }
+        );
+        data = await r.json().catch(() => ({}));
+        if (r.ok) break;
+        console.error('Gemini error', model, r.status, JSON.stringify(data).slice(0, 300));
+        if (r.status !== 503 && r.status !== 500 && r.status !== 504) break;
+        if (i < attempts - 1) await new Promise((ok) => setTimeout(ok, RETRY_WAIT_MS));
       }
-    );
-    const data = await r.json();
+      if (r.ok) break;
+    }
     if (!r.ok) {
-      console.error('Gemini error', r.status, JSON.stringify(data).slice(0, 300));
+      const code = r.status;
       const msg =
-        r.status === 400 || r.status === 403
-          ? 'API 키가 올바르지 않거나 사용할 수 없어요. 키를 다시 확인해 주세요.'
-          : r.status === 429
+        code === 400 || code === 403
+          ? `API 키가 올바르지 않거나 이 모델을 쓸 수 없어요. 키와 모델 이름을 확인해 주세요. (오류 ${code})`
+          : code === 429
           ? '오늘 무료 사용량을 다 썼거나 요청이 몰렸어요. 잠시 후 다시 해 주세요.'
-          : '답변을 만들지 못했어요. 잠시 후 다시 해 주세요.';
+          : code === 404
+          ? 'AI 모델을 찾을 수 없어요. 선생님께 알려 주세요. (오류 404)'
+          : code === 503
+          ? '지금 AI가 많이 바빠요. 잠시 후 다시 해 주세요. (오류 503)'
+          : `답변을 만들지 못했어요. 잠시 후 다시 해 주세요. (오류 ${code})`;
       return res.status(502).json({ error: msg });
     }
     const parts = data.candidates?.[0]?.content?.parts || [];

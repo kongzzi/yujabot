@@ -4,7 +4,7 @@
 // API 키는 코드에 쓰지 않고 Vercel 환경변수 GEMINI_API_KEY 에만 넣습니다.
 // 브라우저에서는 이 키가 보이지 않습니다.
 
-const MODEL = process.env.GEMINI_MODEL || 'gemini-2.5-flash';
+const MODEL = process.env.GEMINI_MODEL || 'gemini-4-hydrogen';
 const MAX_OUTPUT_TOKENS = 700;   // 답변 길이 상한
 const MAX_MESSAGES = 12;         // 한 번에 보내는 대화 길이 상한
 const MAX_MSG_CHARS = 1000;      // 질문 1개 글자 상한

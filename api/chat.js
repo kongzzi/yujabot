@@ -6,7 +6,7 @@
 
 // 모델 이름: 환경변수 GEMINI_MODEL로 바꿀 수 있고, 쉼표로 여러 개를 적으면 앞에서부터 차례로 시도합니다.
 // 기본값: gemini-4-hydrogen 이 바쁘거나 없으면 gemini-3.8-flash 로 넘어갑니다. (모델 이름은 AI Studio의 모델 목록에서 확인합니다)
-const MODELS = (process.env.GEMINI_MODEL || 'gemini-4-hydrogen,gemini-3.8-flash').split(',').map((m) => m.trim()).filter(Boolean);
+const MODELS = (process.env.GEMINI_MODEL || 'gemini-3.5-flash-lite,gemini-3.8-flash,gemini-4-hydrogen').split(',').map((m) => m.trim()).filter(Boolean);
 const RETRY_WAIT_MS = 1500;      // 모델이 바쁠 때(503) 다시 시도하기 전 기다리는 시간
 const CALL_TIMEOUT_MS = 20000;   // 모델 한 번 호출을 기다리는 최대 시간
 const TOTAL_TIMEOUT_MS = 40000;  // 한 질문에 쓰는 전체 시간(이 시간이 지나면 새 시도를 하지 않음)

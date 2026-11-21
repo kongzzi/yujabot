@@ -64,8 +64,8 @@ module.exports = async (req, res) => {
       generationConfig: { maxOutputTokens: MAX_OUTPUT_TOKENS },
     });
 
-    // 모델을 차례로 시도합니다. 모델이 하나뿐이면 바쁠 때(503) 한 번 더 시도합니다.
-    const attempts = MODELS.length === 1 ? 2 : 1;
+    // 모델을 차례로 시도합니다. 바쁠 때(503)는 같은 모델로 한 번 더 시도한 뒤 다음 모델로 넘어갑니다.
+    const attempts = 2;
     let r;
     let data = {};
     for (const model of MODELS) {

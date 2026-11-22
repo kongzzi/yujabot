@@ -31,5 +31,14 @@ const CONFIG = {
 
   // 채용 공고와 기관 정보는 jobs.js에 있습니다. 여기에는 그 밖의 참고 정보만 둡니다.
   knowledge: `
-`
+`,
+
+  // ── 꾸미기 ── (웹 교재 꾸미기 페이지에서 고른 값)
+  theme: {
+    color: "#f59e0b",      // 대표 색: 유자 주황
+    avatar: "🍊",          // 챗봇 프로필
+    header: "color",       // 맨 위 이름 칸: line / color
+    background: "soft",    // 대화 배경: plain / soft / dots / wave
+    bubble: "round"        // 말풍선: round / square / pill
+  }
 };

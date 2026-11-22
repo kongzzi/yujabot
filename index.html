@@ -30,13 +30,34 @@
   #send { border: 0; background: var(--brand); color: #fff; border-radius: 12px; padding: 0 18px; font-size: 15px; cursor: pointer; }
   #send:disabled { opacity: .5; cursor: default; }
   footer { text-align: center; font-size: 11px; color: var(--muted); padding: 0 16px 10px; }
+
+  /* ── 꾸미기 (config.js의 theme 값으로 바뀜) ── */
+  .user { color: var(--on-brand, #fff); }
+  #send { color: var(--on-brand, #fff); }
+  header { display: flex; align-items: center; gap: 12px; }
+  .av { flex: none; width: 34px; height: 34px; border-radius: 50%; display: grid; place-items: center; font-size: 20px; line-height: 1; background: var(--bot); overflow: hidden; }
+  .av img { width: 100%; height: 100%; object-fit: cover; }
+  header .av { width: 44px; height: 44px; font-size: 26px; }
+  .row { display: flex; align-items: flex-end; gap: 8px; align-self: flex-start; max-width: 92%; }
+  .row .msg { max-width: none; }
+  body.head-color header { background: var(--brand); border-bottom-color: transparent; }
+  body.head-color header h1, body.head-color header p { color: var(--on-brand, #fff); }
+  body.head-color header p { opacity: .85; }
+  body.head-color header .av { background: rgba(255,255,255,.9); }
+  body.bg-soft #log { background: color-mix(in srgb, var(--brand) 7%, var(--card)); }
+  body.bg-dots #log { background-color: var(--card); background-image: radial-gradient(color-mix(in srgb, var(--brand) 22%, transparent) 1.2px, transparent 1.3px); background-size: 18px 18px; }
+  body.bg-wave #log { background: linear-gradient(180deg, var(--card) 0%, color-mix(in srgb, var(--brand) 12%, var(--card)) 100%); }
+  body.bubble-square .msg { border-radius: 6px; }
+  body.bubble-pill .msg { border-radius: 22px; padding: 11px 16px; }
+  body.bubble-pill .bot { border-bottom-left-radius: 6px; }
+  body.bubble-pill .user { border-bottom-right-radius: 6px; }
 </style>
 </head>
 <body>
 <div class="app">
   <header>
-    <h1 id="name"></h1>
-    <p id="tagline"></p>
+    <span class="av" id="head-av" aria-hidden="true"></span>
+    <div><h1 id="name"></h1><p id="tagline"></p></div>
   </header>
   <div id="log" aria-live="polite"></div>
   <div id="examples"></div>
@@ -53,6 +74,29 @@
   const log = $('log'), input = $('input'), sendBtn = $('send');
   const history = [];
   let busy = false;
+
+  // ── 꾸미기: config.js의 theme 값을 화면에 적용한다 (값이 없거나 틀리면 기본 모양) ──
+  const T = CONFIG.theme || {};
+  const pick = (v, list, d) => (list.indexOf(v) >= 0 ? v : d);
+  const color = /^#[0-9a-fA-F]{6}$/.test(T.color || '') ? T.color : '#2563eb';
+  const rgb = [1, 3, 5].map((i) => parseInt(color.slice(i, i + 2), 16) / 255).map((c) => (c <= 0.03928 ? c / 12.92 : Math.pow((c + 0.055) / 1.055, 2.4)));
+  const light = 0.2126 * rgb[0] + 0.7152 * rgb[1] + 0.0722 * rgb[2] > 0.179;   // 밝은 색이면 글자를 검게 (흰 글자보다 검은 글자가 더 잘 보일 때)
+  document.documentElement.style.setProperty('--brand', color);
+  document.documentElement.style.setProperty('--user', color);
+  document.documentElement.style.setProperty('--on-brand', light ? '#1c1f24' : '#ffffff');
+  document.body.classList.add('head-' + pick(T.header, ['line', 'color'], 'line'));
+  document.body.classList.add('bg-' + pick(T.background, ['plain', 'soft', 'dots', 'wave'], 'plain'));
+  document.body.classList.add('bubble-' + pick(T.bubble, ['round', 'square', 'pill'], 'round'));
+  const avatar = String(T.avatar || '').trim();
+  function avatarEl(el) {
+    if (!avatar) { el.remove(); return; }
+    if (/^(https:\/\/|images\/)[^\s"'<>]+$/.test(avatar)) {       // 그림 주소면 그림으로
+      const im = document.createElement('img'); im.src = avatar; im.alt = ''; el.appendChild(im);
+    } else {
+      el.textContent = Array.from(avatar).slice(0, 2).join('');    // 이모지나 글자 한두 개
+    }
+  }
+  avatarEl($('head-av'));
 
   document.title = CONFIG.botName;
   $('name').textContent = CONFIG.botName;
@@ -80,7 +124,13 @@
     const d = document.createElement('div');
     d.className = 'msg ' + kind;
     d.textContent = text;           // textContent 사용: 답변 안의 코드가 실행되지 않게
-    log.appendChild(d);
+    if (kind === 'bot' && avatar) {   // 챗봇 말풍선 옆에 프로필
+      const row = document.createElement('div'); row.className = 'row';
+      const av = document.createElement('span'); av.className = 'av'; av.setAttribute('aria-hidden', 'true'); avatarEl(av);
+      row.appendChild(av); row.appendChild(d); log.appendChild(row);
+    } else {
+      log.appendChild(d);
+    }
     log.scrollTop = log.scrollHeight;
     return d;
   }
@@ -130,7 +180,7 @@
       again.type = 'button';
       again.className = 'retry';
       again.textContent = '다시 보내기';
-      again.onclick = () => { wait.remove(); ask(text, true); };
+      again.onclick = () => { (wait.parentNode.classList.contains('row') ? wait.parentNode : wait).remove(); ask(text, true); };
       wait.appendChild(again);              // 실패한 질문은 대화 기록에 넣지 않는다
     }
     busy = false; sendBtn.disabled = false; input.focus();

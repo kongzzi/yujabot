@@ -88,16 +88,19 @@
   // 서버에 질문을 보내고 { reply } 또는 { error } 를 돌려줍니다. (대화 기록은 바꾸지 않습니다)
   async function call(text) {
     try {
+      const ctl = new AbortController();
+      const timer = setTimeout(() => ctl.abort(), 60000);   // 60초가 지나도 답이 없으면 그만 기다린다
       const r = await fetch('/api/chat', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ system: systemPrompt(), messages: history.concat({ role: 'user', content: text }) })
-      });
+        body: JSON.stringify({ system: systemPrompt(), messages: history.concat({ role: 'user', content: text }) }),
+        signal: ctl.signal
+      }).finally(() => clearTimeout(timer));
       const data = await r.json().catch(() => ({}));
       if (!r.ok) return { error: data.error || '오류가 발생했어요.' };
       return { reply: data.reply };
     } catch (e) {
-      return { error: '연결에 실패했어요. 잠시 후 다시 해 주세요.' };
+      return { error: '답이 오지 않거나 연결에 실패했어요. 잠시 후 다시 해 주세요.' };
     }
   }
 

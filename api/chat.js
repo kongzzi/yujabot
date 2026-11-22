@@ -5,7 +5,8 @@
 // 브라우저에서는 이 키가 보이지 않습니다.
 
 // 모델 이름: 환경변수 GEMINI_MODEL로 바꿀 수 있고, 쉼표로 여러 개를 적으면 앞에서부터 차례로 시도합니다.
-// 기본값: gemini-4-hydrogen 이 바쁘거나 없으면 gemini-3.8-flash 로 넘어갑니다. (모델 이름은 AI Studio의 모델 목록에서 확인합니다)
+// 기본값: 빠른 gemini-3.5-flash-lite 를 먼저 쓰고, 바쁘거나 없으면 gemini-3.8-flash, gemini-4-hydrogen 순으로 넘어갑니다.
+// (모델 이름은 서비스 업데이트로 바뀔 수 있어요. AI Studio의 모델 목록에서 확인합니다)
 const MODELS = (process.env.GEMINI_MODEL || 'gemini-3.5-flash-lite,gemini-3.8-flash,gemini-4-hydrogen').split(',').map((m) => m.trim()).filter(Boolean);
 const RETRY_WAIT_MS = 1500;      // 모델이 바쁠 때(503) 다시 시도하기 전 기다리는 시간
 const CALL_TIMEOUT_MS = 20000;   // 모델 한 번 호출을 기다리는 최대 시간
@@ -16,6 +17,41 @@ const MAX_MESSAGES = 12;         // 한 번에 보내는 대화 길이 상한
 const MAX_MSG_CHARS = 1000;      // 질문 1개 글자 상한
 const MAX_SYSTEM_CHARS = 30000;  // 지시문 + 지식칸 상한
 const RATE_LIMIT = 30;           // IP당 분당 호출 수 (무료 한도 보호용. 교실 와이파이 공유를 고려해 상향)
+
+// 참고 정보 목록: 저장소 맨 위의 jobs.js를 서버가 읽어 지시문 뒤에 붙입니다.
+let JOBS = [];
+try {
+  const j = require('../jobs.js');
+  JOBS = Array.isArray(j) ? j : [];
+} catch (e) {
+  console.error('jobs.js 읽기 실패: 파일이 없거나 쉼표·따옴표가 깨졌어요.', e && e.message);
+}
+const JOBS_MAX_CHARS = 40000;    // 참고 정보 목록 글자 상한 (넘으면 뒤쪽이 잘리고 로그에 경고)
+const JOB_FIELDS = [
+  ['name', '회사·기관'], ['title', '직무·공고명'], ['duties', '상세 업무'], ['requirements', '자격 조건'],
+  ['location', '근무지'], ['employment', '고용 형태'], ['pay', '급여'], ['deadline', '마감일'],
+  ['source', '출처'], ['checked', '확인 날짜'],
+];
+function jobsBlock() {
+  const items = JOBS.filter((j) => j && typeof j === 'object' && (String(j.name || '').trim() || String(j.title || '').trim()));
+  if (!items.length) return '';
+  const today = new Date(Date.now() + 9 * 3600 * 1000).toISOString().slice(0, 10);   // 한국 날짜
+  const lines = items.map((j) => {
+    const head = `- [${String(j.type || '참고').trim()}]`;
+    const rows = JOB_FIELDS
+      .filter(([k]) => String(j[k] || '').trim())
+      .map(([k, label]) => `  ${label}: ${String(j[k]).trim()}`);
+    return [head].concat(rows).join('\n');
+  });
+  let text = `[참고 정보 - 채용 공고와 기관 목록]\n` +
+    `오늘 날짜(한국 시간): ${today}. 마감일이 오늘보다 지난 공고는 "마감되었을 수 있으니 출처에서 확인해 주세요"라고 안내한다.\n` +
+    `목록에 없는 칸(급여, 마감일, 자격 조건 등)은 모르는 정보이므로 지어내지 않는다.\n` + lines.join('\n');
+  if (text.length > JOBS_MAX_CHARS) {
+    console.warn('jobs.js 내용이 길어 뒤쪽을 잘랐어요.', text.length, '자 →', JOBS_MAX_CHARS, '자');
+    text = text.slice(0, JOBS_MAX_CHARS);
+  }
+  return text;
+}
 
 const hits = new Map();
 function rateLimited(ip) {
@@ -59,7 +95,7 @@ module.exports = async (req, res) => {
 
   try {
     const payload = JSON.stringify({
-      systemInstruction: { parts: [{ text: `${SAFETY}\n\n${system}` }] },
+      systemInstruction: { parts: [{ text: [SAFETY, system, jobsBlock()].filter(Boolean).join('\n\n') }] },
       contents: clean.map((m) => ({
         role: m.role === 'assistant' ? 'model' : 'user',
         parts: [{ text: m.content }],
